@@ -45,6 +45,7 @@ ArduinoMCP2515 mcp2515(spi_select,
                        nullptr);
 
 ArduinoUAVCAN uavcan(13, nullptr);
+//ArduinoUAVCAN uavcan(127, nullptr);
 
 /**************************************************************************************
  * SETUP/LOOP
@@ -67,7 +68,8 @@ void setup()
 
   /* Initialize MCP2515 */
   mcp2515.begin();
-  mcp2515.setBitRate(CanBitRate::BR_250kBPS);
+  //mcp2515.setBitRate(CanBitRate::BR_250kBPS);
+  mcp2515.setBitRate(CanBitRate::BR_500kBPS);
   mcp2515.setNormalMode();
 
   /* Subscribe to the reception of Heartbeat message. */

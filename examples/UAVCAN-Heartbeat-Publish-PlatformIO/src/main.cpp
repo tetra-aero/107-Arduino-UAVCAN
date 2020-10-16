@@ -1,5 +1,5 @@
 /*
- * This example shows reception of a UAVCAN heartbeat message via CAN.
+ * This example shows periodic transmission of a UAVCAN heartbeat message via CAN.
  *
  * Hardware:
  *   - Arduino MKR family board, e.g. MKR VIDOR 4000
@@ -9,7 +9,7 @@
 /**************************************************************************************
  * INCLUDE
  **************************************************************************************/
-#include <Arduino.h>
+
 #include <SPI.h>
 
 #include <ArduinoUAVCAN.h>
@@ -26,12 +26,11 @@ static int const MKRCAN_MCP2515_INT_PIN = 7;
  * FUNCTION DECLARATION
  **************************************************************************************/
 
-void    spi_select             ();
-void    spi_deselect           ();
-uint8_t spi_transfer           (uint8_t const);
-void    onExternalEvent        ();
-void    onReceiveBufferFull    (CanardFrame const &);
-void    onHeatbeat_1_0_Received(CanardTransfer const &, ArduinoUAVCAN &);
+void    spi_select      ();
+void    spi_deselect    ();
+uint8_t spi_transfer    (uint8_t const);
+void    onExternalEvent ();
+bool    transmitCanFrame(CanardFrame const &);
 
 /**************************************************************************************
  * GLOBAL VARIABLES
@@ -41,10 +40,12 @@ ArduinoMCP2515 mcp2515(spi_select,
                        spi_deselect,
                        spi_transfer,
                        micros,
-                       onReceiveBufferFull,
+                       nullptr,
                        nullptr);
 
-ArduinoUAVCAN uavcan(13, nullptr);
+ArduinoUAVCAN uavcan(13, transmitCanFrame);
+
+Heartbeat_1_0 hb;
 
 /**************************************************************************************
  * SETUP/LOOP
@@ -53,8 +54,7 @@ ArduinoUAVCAN uavcan(13, nullptr);
 void setup()
 {
   Serial.begin(9600);
-  while(!Serial) { }
-  Serial.println("You opened Serial, hello");
+  //while(!Serial) { }
 
   /* Setup SPI access */
   SPI.begin();
@@ -63,20 +63,39 @@ void setup()
 
   /* Attach interrupt handler to register MCP2515 signaled by taking INT low */
   pinMode(MKRCAN_MCP2515_INT_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(MKRCAN_MCP2515_INT_PIN), &onExternalEvent, FALLING);
+  attachInterrupt(digitalPinToInterrupt(MKRCAN_MCP2515_INT_PIN), onExternalEvent, FALLING);
 
   /* Initialize MCP2515 */
   mcp2515.begin();
-  mcp2515.setBitRate(CanBitRate::BR_250kBPS);
+  //mcp2515.setBitRate(CanBitRate::BR_250kBPS);
+  mcp2515.setBitRate(CanBitRate::BR_500kBPS);
   mcp2515.setNormalMode();
 
-  /* Subscribe to the reception of Heartbeat message. */
-  uavcan.subscribe<Heartbeat_1_0>(onHeatbeat_1_0_Received);
+  /* Configure initial heartbeat */
+  hb.data.uptime = 0;
+  hb = Heartbeat_1_0::Health::NOMINAL;
+  hb = Heartbeat_1_0::Mode::INITIALIZATION;
+  hb.data.vendor_specific_status_code = 0;
 }
 
 void loop()
 {
+  /* Update the heartbeat object */
+  hb.data.uptime = millis() / 1000;
+  hb = Heartbeat_1_0::Mode::OPERATIONAL;
 
+  /* Publish the heartbeat once/second */
+  static unsigned long prev = 0;
+  unsigned long const now = millis();
+  if(now - prev > 1000) {
+    //Serial.println("publish");
+    uavcan.publish(hb);
+    Serial.println(hb.data.vendor_specific_status_code);
+    prev = now;
+  }
+//Serial.println("test");
+  /* Transmit all enqeued CAN frames */
+  while(uavcan.transmitCanFrame()) { }
 }
 
 /**************************************************************************************
@@ -100,25 +119,10 @@ uint8_t spi_transfer(uint8_t const data)
 
 void onExternalEvent()
 {
-  Serial.println("onExternalEvent");
   mcp2515.onExternalEventHandler();
 }
 
-void onReceiveBufferFull(CanardFrame const & frame)
+bool transmitCanFrame(CanardFrame const & frame)
 {
-  Serial.println("onReceiveBufferFull");
-  uavcan.onCanFrameReceived(frame);
-}
-
-void onHeatbeat_1_0_Received(CanardTransfer const & transfer, ArduinoUAVCAN & /* uavcan */)
-{
-  Serial.println("onHeatbeat_1_0_Received");
-  Heartbeat_1_0 const hb = Heartbeat_1_0::create(transfer);
-
-  char msg[64];
-  snprintf(msg, 64,
-           "ID %02X, Uptime = %d, Health = %d, Mode = %d, VSSC = %d",
-           transfer.remote_node_id, hb.data.uptime, hb.data.health, hb.data.mode, hb.data.vendor_specific_status_code);
-
-  Serial.println(msg);
+  return mcp2515.transmit(frame);
 }
